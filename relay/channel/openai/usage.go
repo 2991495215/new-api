@@ -1,10 +1,14 @@
 package openai
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 )
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
@@ -48,6 +52,69 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 			}
 		}
 	}
+
+	fillMissingImageTokenDetails(info, usage)
+}
+
+func fillMissingImageTokenDetails(info *relaycommon.RelayInfo, usage *dto.Usage) {
+	if info == nil || usage == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.ImageTokens != 0 || info.Request == nil {
+		return
+	}
+	if info.ChannelType != constant.ChannelTypeAdvancedCustom {
+		return
+	}
+	model := info.GetUpstreamModelName()
+	if model == "" {
+		model = info.OriginModelName
+	}
+	if !strings.Contains(strings.ToLower(model), "qwen") {
+		return
+	}
+	fillMissingImageTokenDetailsWithMeta(info, usage, info.Request.GetTokenCountMeta())
+}
+
+func fillMissingImageTokenDetailsWithMeta(info *relaycommon.RelayInfo, usage *dto.Usage, meta *relaytypes.TokenCountMeta) {
+	if usage == nil || usage.PromptTokens <= 0 || usage.PromptTokensDetails.ImageTokens != 0 {
+		return
+	}
+	if meta == nil {
+		return
+	}
+	hasImage := false
+	for _, file := range meta.Files {
+		if file != nil && file.FileType == relaytypes.FileTypeImage {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return
+	}
+
+	textTokens := usage.PromptTokensDetails.TextTokens
+	if textTokens <= 0 {
+		textTokens = estimateRequestTextTokens(info, meta)
+	}
+	if textTokens <= 0 || textTokens >= usage.PromptTokens {
+		return
+	}
+	usage.PromptTokensDetails.TextTokens = textTokens
+	usage.PromptTokensDetails.ImageTokens = usage.PromptTokens - textTokens
+}
+
+func estimateRequestTextTokens(info *relaycommon.RelayInfo, meta *relaytypes.TokenCountMeta) int {
+	if meta == nil {
+		return 0
+	}
+	model := info.GetUpstreamModelName()
+	if model == "" {
+		model = info.OriginModelName
+	}
+	tokens := service.CountTextToken(meta.CombineText, model)
+	if info.RelayFormat == relaytypes.RelayFormatOpenAI {
+		tokens += meta.ToolsCount*8 + meta.MessagesCount*3 + meta.NameCount*3 + 3
+	}
+	return tokens
 }
 
 func extractCachedTokensFromBody(body []byte) (int, bool) {
