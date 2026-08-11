@@ -252,7 +252,7 @@ func TestResponsesRequestToChatCompletionsRequestCustomToolCallPreservesRawShape
 	assert.Equal(t, dto.CustomType, toolCalls[0].Type)
 	assert.Equal(t, "call_custom", toolCalls[0].ID)
 	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
-	assert.Equal(t, "patch body", toolCalls[0].Function.Arguments)
+	assert.JSONEq(t, `{"input":"patch body"}`, toolCalls[0].Function.Arguments)
 	assert.Equal(t, "custom_tool_call", gjson.GetBytes(toolCalls[0].Custom, "type").String())
 	assert.Equal(t, "patch body", gjson.GetBytes(toolCalls[0].Custom, "input").String())
 }
@@ -293,6 +293,92 @@ func TestResponsesRequestToChatCompletionsRequestRejectsStatefulFields(t *testin
 			assert.Contains(t, err.Error(), "stateful fields")
 		})
 	}
+}
+
+func TestResponsesRequestToChatCompletionsRequestReasoningItemBecomesAssistantReasoningContent(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"type": "reasoning",
+				"content": []map[string]any{
+					{"type": "reasoning_text", "text": "think carefully"},
+				},
+			},
+			{
+				"type":      "function_call",
+				"call_id":   "call_1",
+				"name":      "lookup",
+				"arguments": "{}",
+			},
+			{
+				"type":    "function_call_output",
+				"call_id": "call_1",
+				"output":  "{}",
+			},
+		}),
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Messages, 2)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "think carefully", got.Messages[0].GetReasoningContent())
+	assert.Empty(t, got.Messages[0].StringContent())
+	toolCalls := got.Messages[0].ParseToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "call_1", toolCalls[0].ID)
+	assert.Equal(t, "tool", got.Messages[1].Role)
+
+	encoded, err := kitutil.Marshal(got)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "reasoning_text")
+}
+
+func TestResponsesRequestToChatCompletionsRequestAssistantContentMovesReasoningText(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "reasoning_text", "text": "think first"},
+					{"type": "output_text", "text": "answer"},
+				},
+			},
+		}),
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Messages, 1)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "answer", got.Messages[0].StringContent())
+	assert.Equal(t, "think first", got.Messages[0].GetReasoningContent())
+}
+
+func TestResponsesRequestToChatCompletionsRequestCustomToolCallOutputUsesToolRole(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"type":    "custom_tool_call",
+				"call_id": "patch_1",
+				"name":    "apply_patch",
+				"input":   "patch body",
+			},
+			{
+				"type":    "custom_tool_call_output",
+				"call_id": "patch_1",
+				"output":  "done",
+			},
+		}),
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Messages, 2)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "tool", got.Messages[1].Role)
+	assert.Equal(t, "patch_1", got.Messages[1].ToolCallId)
+	assert.Equal(t, "done", got.Messages[1].StringContent())
 }
 
 func mustRawMessage(t *testing.T, value any) []byte {

@@ -161,6 +161,12 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(_ *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	normalizedInput, err := normalizeDeepSeekResponsesInput(request.Input)
+	if err != nil {
+		return nil, err
+	}
+	request.Input = normalizedInput
+	request.ParallelToolCalls = []byte("false")
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
 	return request, nil
 }

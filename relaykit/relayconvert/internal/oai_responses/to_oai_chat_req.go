@@ -15,6 +15,8 @@ const (
 	responsesInputTypeFunctionCallOutput = "function_call_output"
 	responsesInputTypeCustomToolCall     = "custom_tool_call"
 	responsesInputTypeCustomToolOutput   = "custom_tool_call_output"
+	responsesInputTypeReasoning          = "reasoning"
+	responsesInputTypeReasoningText      = "reasoning_text"
 )
 
 const (
@@ -179,10 +181,16 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 			return nil, err
 		}
 		return appendToolCallToLastAssistant(messages, toolCall), nil
-	case responsesInputTypeFunctionCallOutput:
-		callID := strings.TrimSpace(kitutil.Interface2String(item["call_id"]))
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput:
+		callID := responsesCallID(item)
 		content := responseToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
+	case responsesInputTypeReasoning:
+		reasoning := responsesReasoningItemText(item)
+		if reasoning == "" {
+			return messages, nil
+		}
+		return append(messages, dto.Message{Role: "assistant", Content: "", ReasoningContent: &reasoning}), nil
 	}
 
 	role := strings.TrimSpace(kitutil.Interface2String(item["role"]))
@@ -193,7 +201,13 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 	if err != nil {
 		return nil, err
 	}
-	return append(messages, dto.Message{Role: role, Content: content}), nil
+	message := dto.Message{Role: role, Content: content}
+	if role == "assistant" {
+		if reasoning := responsesContentReasoningText(item["content"]); reasoning != "" {
+			message.ReasoningContent = &reasoning
+		}
+	}
+	return append(messages, message), nil
 }
 
 func responsesInputContentToChatContent(content any) (any, error) {
@@ -263,6 +277,8 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 				"type":      dto.ContentTypeVideoUrl,
 				"video_url": responsesVideoPartToChatVideoURL(part),
 			})
+		case responsesInputTypeReasoningText, "reasoning":
+			continue
 		default:
 			onlyText = false
 			chatParts = append(chatParts, part)
@@ -273,6 +289,43 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 		return textOnly.String(), nil
 	}
 	return chatParts, nil
+}
+
+func responsesReasoningItemText(item map[string]any) string {
+	return responsesContentReasoningText(item["content"])
+}
+
+func responsesContentReasoningText(content any) string {
+	switch value := content.(type) {
+	case string:
+		return ""
+	case []any:
+		return responsesPartsReasoningText(value)
+	case []map[string]any:
+		parts := make([]any, 0, len(value))
+		for _, part := range value {
+			parts = append(parts, part)
+		}
+		return responsesPartsReasoningText(parts)
+	default:
+		return ""
+	}
+}
+
+func responsesPartsReasoningText(parts []any) string {
+	var builder strings.Builder
+	for _, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType := strings.TrimSpace(kitutil.Interface2String(part["type"]))
+		if partType != responsesInputTypeReasoningText && partType != "reasoning" {
+			continue
+		}
+		builder.WriteString(kitutil.Interface2String(part["text"]))
+	}
+	return builder.String()
 }
 
 func responsesFunctionCallItemToChatToolCall(item map[string]any) (dto.ToolCallRequest, error) {
@@ -301,9 +354,16 @@ func responsesCustomToolCallItemToChatToolCall(item map[string]any) (dto.ToolCal
 		Custom: raw,
 		Function: dto.FunctionRequest{
 			Name:      strings.TrimSpace(kitutil.Interface2String(item["name"])),
-			Arguments: responsesArgumentsString(item["input"]),
+			Arguments: responsesCustomToolCallArguments(item["input"]),
 		},
 	}, nil
+}
+
+func responsesCustomToolCallArguments(input any) string {
+	if _, ok := input.(string); ok {
+		return responsesArgumentsString(map[string]any{"input": input})
+	}
+	return responsesArgumentsString(input)
 }
 
 func appendToolCallToLastAssistant(messages []dto.Message, toolCall dto.ToolCallRequest) []dto.Message {
