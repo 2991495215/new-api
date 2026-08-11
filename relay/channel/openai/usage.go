@@ -102,6 +102,26 @@ func fillMissingImageTokenDetailsWithMeta(info *relaycommon.RelayInfo, usage *dt
 	usage.PromptTokensDetails.ImageTokens = usage.PromptTokens - textTokens
 }
 
+func hasFilledImageTokenDetails(usage *dto.Usage) bool {
+	return usage != nil && usage.PromptTokensDetails.TextTokens > 0 && usage.PromptTokensDetails.ImageTokens > 0
+}
+
+func rewriteStreamUsage(lastStreamData string, usage *dto.Usage) string {
+	if lastStreamData == "" || !hasFilledImageTokenDetails(usage) {
+		return lastStreamData
+	}
+	var streamResp dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(lastStreamData, &streamResp); err != nil {
+		return lastStreamData
+	}
+	streamResp.Usage = usage
+	data, err := common.Marshal(streamResp)
+	if err != nil {
+		return lastStreamData
+	}
+	return string(data)
+}
+
 func estimateRequestTextTokens(info *relaycommon.RelayInfo, meta *relaytypes.TokenCountMeta) int {
 	if meta == nil {
 		return 0
