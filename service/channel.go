@@ -2,13 +2,22 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+)
+
+const automaticDisable429Threshold = 3
+
+var (
+	autoDisable429Mu     sync.Mutex
+	autoDisable429Counts = map[int]int{}
 )
 
 func formatNotifyType(channelId int, status int) string {
@@ -62,6 +71,44 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	lowerMessage := strings.ToLower(err.Error())
 	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
 	return search
+}
+
+func ShouldDisableChannelWith429Threshold(channelID int, err *types.NewAPIError) bool {
+	if !common.AutomaticDisableChannelEnabled {
+		return false
+	}
+	if err == nil {
+		return false
+	}
+	if types.IsChannelError(err) {
+		return true
+	}
+	if types.IsSkipRetryError(err) {
+		return false
+	}
+	if err.StatusCode != http.StatusTooManyRequests {
+		return ShouldDisableChannel(err)
+	}
+
+	autoDisable429Mu.Lock()
+	count := autoDisable429Counts[channelID] + 1
+	autoDisable429Counts[channelID] = count
+	autoDisable429Mu.Unlock()
+
+	if count < automaticDisable429Threshold {
+		common.SysLog(fmt.Sprintf("通道 #%d 连续 %d/%d 次 429，暂不自动禁用", channelID, count, automaticDisable429Threshold))
+		return false
+	}
+
+	common.SysLog(fmt.Sprintf("通道 #%d 连续 %d 次 429，触发自动禁用", channelID, automaticDisable429Threshold))
+	delete(autoDisable429Counts, channelID)
+	return true
+}
+
+func ResetChannelAutoDisable429Counter(channelID int) {
+	autoDisable429Mu.Lock()
+	delete(autoDisable429Counts, channelID)
+	autoDisable429Mu.Unlock()
 }
 
 func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
