@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +22,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClineNonstreamCompatibility(t *testing.T) {
+	const completion = `{"id":"chat-test","object":"chat.completion","model":"deepseek/deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"OK","reasoning":"kept","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}],"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25,"prompt_tokens_details":{"cached_tokens":12}},"provider":"kept"}`
+	for _, tt := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "wrapped", body: `{"success":true,"data":` + completion + `}`, want: completion},
+		{name: "standard", body: completion, want: completion},
+		{name: "failed envelope", body: `{"success":false,"data":` + completion + `}`, want: `"success":false`},
+		{name: "non-chat data", body: `{"success":true,"data":{"message":"not a completion"}}`, want: `"data"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: types.RelayFormatOpenAI,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "deepseek-v4.1-flash"},
+			}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(tt.body))}
+			usage, err := openai.OpenaiHandler(c, info, resp)
+			require.Nil(t, err)
+			if tt.want == completion {
+				assert.JSONEq(t, completion, recorder.Body.String())
+				assert.Equal(t, 20, usage.PromptTokens)
+				assert.Equal(t, 5, usage.CompletionTokens)
+				assert.Equal(t, 12, usage.PromptTokensDetails.CachedTokens)
+			} else {
+				assert.Contains(t, recorder.Body.String(), tt.want)
+			}
+		})
+	}
+	for _, endpoint := range []string{"", string(constant.EndpointTypeOpenAI)} {
+		for _, stream := range []bool{false, true} {
+			for _, tt := range []struct {
+				baseURL string
+				limit   uint
+			}{
+				{"https://api.cline.bot/api", 512},
+				{"https://api.openai.com", 16},
+				{"https://api.cline.bot.evil.example/api", 16},
+			} {
+				request := buildTestRequest("glm-5.3-flash", endpoint, &model.Channel{BaseURL: lo.ToPtr(tt.baseURL)}, stream).(*dto.GeneralOpenAIRequest)
+				require.NotNil(t, request.MaxTokens)
+				assert.Equal(t, tt.limit, *request.MaxTokens)
+			}
+		}
+	}
+}
 
 func convertChatCompatibilityRequest(t *testing.T, request *dto.GeneralOpenAIRequest, channelType int, mapping map[string]string) []byte {
 	t.Helper()

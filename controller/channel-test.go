@@ -700,6 +700,11 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
+	chatMaxTokens := uint(16)
+	if channel != nil && strings.HasPrefix(channel.GetBaseURL(), "https://api.cline.bot/") {
+		// Cline reasoning models can exhaust a 16-token probe before producing text.
+		chatMaxTokens = 512
+	}
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {
@@ -773,7 +778,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 						Content: "hi",
 					},
 				},
-				MaxTokens: lo.ToPtr(uint(16)),
+				MaxTokens: lo.ToPtr(chatMaxTokens),
 			}
 			if isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
@@ -828,7 +833,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	}
 
 	if dto.IsOpenAIReasoningOModel(model) {
-		testRequest.MaxCompletionTokens = lo.ToPtr(uint(16))
+		testRequest.MaxCompletionTokens = lo.ToPtr(chatMaxTokens)
 	} else if strings.Contains(model, "thinking") {
 		if !strings.Contains(model, "claude") {
 			testRequest.MaxTokens = lo.ToPtr(uint(50))
@@ -836,7 +841,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	} else if strings.Contains(model, "gemini") {
 		testRequest.MaxTokens = lo.ToPtr(uint(3000))
 	} else {
-		testRequest.MaxTokens = lo.ToPtr(uint(16))
+		testRequest.MaxTokens = lo.ToPtr(chatMaxTokens)
 	}
 
 	return testRequest
