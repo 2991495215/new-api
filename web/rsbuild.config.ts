@@ -83,6 +83,8 @@ export default defineConfig(({ envMode }) => {
       // extracted license files, which some distributions require for open-source compliance.
     },
     performance: {
+      // Report raw sizes without recompressing every chunk on the constrained build host.
+      printFileSize: { compressed: false, detail: false },
       // Remove console in production
       removeConsole: isProd ? ['log'] : false,
       buildCache: false,
