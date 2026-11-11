@@ -1,6 +1,6 @@
 module github.com/QuantumNous/new-api
 
-// +heroku goVersion go1.18
+// +heroku goVersion go1.26.10
 go 1.26.10
 
 require (
@@ -173,6 +173,7 @@ require (
 require (
 	github.com/Calcium-Ion/moejs v0.1.0-alpha.10
 	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
+	github.com/MoeForge/moego v0.1.0-alpha.1
 	github.com/QuantumNous/new-api/relaykit v0.3.5
 	github.com/QuantumNous/new-api/tokenkit v0.0.0
 )
